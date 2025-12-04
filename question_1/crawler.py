@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import logging
 from typing import List, Dict, Optional
 
 import requests
@@ -21,16 +22,34 @@ class HealthMythCrawler:
     BASE_URL = "https://www.hpa.gov.tw"
     TOPIC_LIST_URL = f"{BASE_URL}/Pages/TopicList.aspx?nodeid=127"
     DATE_PATTERN = re.compile(r"(\d{4}/\d{2}/\d{2})")
+    REQUEST_SLEEP_SECONDS = 0.8
+    TIMEOUT_SECONDS = 10
 
     def __init__(
         self,
         storage: CSVHelper,
-        request_sleep_seconds: float = 0.8,
-        timeout_seconds: int = 10,
+        request_sleep_seconds: float = REQUEST_SLEEP_SECONDS,
+        timeout_seconds: int = TIMEOUT_SECONDS,
+        logger: Optional[logging.Logger] = None,
     ):
         self.storage = storage
         self.request_sleep_seconds = request_sleep_seconds
         self.timeout_seconds = timeout_seconds
+
+        if logger is not None:
+            self.logger = logger
+        else:
+            # 預設 logger（只印到 console）
+            self.logger = logging.getLogger(self.__class__.__name__)
+            if not self.logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
+                self.logger.setLevel(logging.INFO)
 
     # ---------- HTTP & 解析 ----------
 
@@ -43,6 +62,7 @@ class HealthMythCrawler:
                 "Chrome/124.0 Safari/537.36"
             )
         }
+        self.logger.debug(f"GET {url}")
         resp = requests.get(url, headers=headers, timeout=self.timeout_seconds)
         resp.raise_for_status()
         resp.encoding = resp.apparent_encoding
@@ -112,6 +132,7 @@ class HealthMythCrawler:
             seen.add(key)
             unique_articles.append(art)
 
+        self.logger.info(f"列表頁解析完成，共取得 {len(unique_articles)} 筆文章。")
         return unique_articles
 
     def _extract_date(self, base_node, label: str) -> str:
@@ -137,6 +158,7 @@ class HealthMythCrawler:
         soup = BeautifulSoup(html, "html.parser")
         full_text = soup.get_text("\n")
         full_text = re.sub(r"\n{2,}", "\n", full_text)
+
         start_idx = 0
         idx = full_text.find("發布日期：")
         if idx != -1:
@@ -152,6 +174,8 @@ class HealthMythCrawler:
             end_idx = len(full_text)
 
         content = full_text[start_idx:end_idx].strip()
+
+        # 再過一層，把 meta 行過濾掉
         lines = [line.strip() for line in content.splitlines()]
         meta_keywords = ["發布單位：", "發布日期：", "更新日期：", "點閱次數："]
         lines = [l for l in lines if not any(k in l for k in meta_keywords)]
@@ -164,7 +188,6 @@ class HealthMythCrawler:
         https://...TopicList.aspx?nodeid=127&idx={idx}
         """
         url = f"{self.TOPIC_LIST_URL}&idx={idx}"
-
         html = self._fetch_html(url)
         articles = self._parse_list_page(html)
         return articles
@@ -173,13 +196,13 @@ class HealthMythCrawler:
 
     def initial_crawl_top_n(self, n: int = 10) -> None:
         """第一次執行：抓列表第 1 頁前 n 篇，含內文，寫入 CSV。"""
-        print(f"=== 初始化：抓取保健闢謠前 {n} 篇文章 ===")
+        self.logger.info(f"=== 初始化：抓取保健闢謠前 {n} 篇文章 ===")
         articles = self._fetch_list_page(idx=0)
         target = articles[:n]
 
         rows: List[Dict] = []
         for art in target:
-            print(f"抓取文章：{art['title']} ({art['url']})")
+            self.logger.info(f"抓取文章：{art['title']} ({art['url']})")
             detail_html = self._fetch_html(art["url"])
             content = self._extract_article_content(detail_html, title=art["title"])
             row = {
@@ -193,7 +216,7 @@ class HealthMythCrawler:
             rows.append(row)
 
         self.storage.save(rows)
-        print(f"完成，已寫入 {self.storage.path}，共 {len(rows)} 筆。")
+        self.logger.info(f"完成，已寫入 {self.storage.path}，共 {len(rows)} 筆。")
 
     def incremental_update(self, max_pages: int = 5) -> None:
         """
@@ -204,33 +227,33 @@ class HealthMythCrawler:
         """
         existing_rows = self.storage.load()
         existing_ids = {row.get("pid") for row in existing_rows if row.get("pid")}
-        print(f"現有 CSV 筆數：{len(existing_rows)}，distinct pid：{len(existing_ids)}")
+        self.logger.info(f"現有 CSV 筆數：{len(existing_rows)}，distinct pid：{len(existing_ids)}")
 
         new_articles: List[Dict] = []
 
         for idx in range(0, max_pages):
-            print(f"檢查列表第 {idx + 1} 頁...")
+            self.logger.info(f"檢查列表第 {idx + 1} 頁...")
             page_articles = self._fetch_list_page(idx=idx)
             if not page_articles:
-                print("此頁無資料，停止。")
+                self.logger.info("此頁無資料，停止。")
                 break
 
             page_new = [a for a in page_articles if a["pid"] not in existing_ids]
             if not page_new:
-                print("此頁所有文章都已在 CSV 中，停止往後翻頁。")
+                self.logger.info("此頁所有文章都已在 CSV 中，停止往後翻頁。")
                 break
 
             for a in page_new:
-                print(f"發現新文章：{a['title']} ({a['url']})")
+                self.logger.info(f"發現新文章：{a['title']} ({a['url']})")
             new_articles.extend(page_new)
 
         if not new_articles:
-            print("沒有發現新文章，CSV 無需更新。")
+            self.logger.info("沒有發現新文章，CSV 無需更新。")
             return
 
         new_rows: List[Dict] = []
         for art in new_articles:
-            print(f"抓取新文章內文：{art['title']}")
+            self.logger.info(f"抓取新文章內文：{art['title']}")
             detail_html = self._fetch_html(art["url"])
             content = self._extract_article_content(
                 detail_html,
@@ -247,7 +270,7 @@ class HealthMythCrawler:
             new_rows.append(row)
 
         self.storage.append(new_rows)
-        print(f"增量更新完成，新增 {len(new_rows)} 筆。")
+        self.logger.info(f"增量更新完成，新增 {len(new_rows)} 筆。")
 
     # ---------- 入口 ----------
 
@@ -258,6 +281,8 @@ class HealthMythCrawler:
         - 有 CSV → 增量更新
         """
         if not os.path.exists(self.storage.path):
+            self.logger.info("偵測不到 CSV 檔，執行初始化爬取流程。")
             self.initial_crawl_top_n(n=initial_n)
         else:
+            self.logger.info("偵測到既有 CSV 檔，執行增量更新流程。")
             self.incremental_update(max_pages=max_pages)
