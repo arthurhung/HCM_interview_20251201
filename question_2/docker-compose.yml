@@ -1,0 +1,65 @@
+# question_2/docker-compose.yml
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: hpa-airflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow:
+    build:
+      context: ..                    # build context = 專案根目錄
+      dockerfile: question_2/Dockerfile
+    container_name: hpa-airflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Executor 使用 LocalExecutor
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+
+      # 使用 Postgres metadata DB
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+
+      # 關閉範例 DAG、DAG 建立時直接啟用
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+
+      # 時區
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Taipei
+    volumes:
+      - ./dags:/opt/airflow/dags          # hpa_crawler_dag.py
+      - ./logs:/opt/airflow/logs          # Airflow 執行 log
+      - ./data:/opt/airflow/data          # ✅ CSV 寫進本機 question_2/data
+      - ./plugins:/opt/airflow/plugins
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+      airflow db upgrade &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Admin
+        --lastname User
+        --role Admin
+        --email admin@example.com || true &&
+      airflow scheduler &
+      airflow webserver
+      "
+
+volumes:
+  postgres_data:
