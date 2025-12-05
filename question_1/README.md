@@ -62,10 +62,17 @@ logs/crawler.log
 
 ## 安裝與執行
 
+## Python版本
+
+```
+3.12.3
+```
+
 ### 安裝套件
 
-<pre class="overflow-visible!" data-start="801" data-end="848"><div class="contain-inline-size rounded-2xl corner-superellipse/1.1 relative bg-token-sidebar-surface-primary"><div class="sticky top-9"><div class="absolute end-0 bottom-0 flex h-9 items-center pe-2"><div class="bg-token-bg-elevated-secondary text-token-text-secondary flex items-center gap-4 rounded-sm px-2 font-sans text-xs"></div></div></div><div class="overflow-y-auto p-4" dir="ltr"><code class="whitespace-pre! language-bash"><span><span>pip install requests beautifulsoup4
-</span></span></code></div></div></pre>
+```
+pip install -r requirements.txt
+```
 
 ### 執行爬蟲
 
@@ -73,7 +80,6 @@ logs/crawler.log
 </span></span></code></div></div></pre>
 
 ---
-
 
 ## 可調整參數
 
